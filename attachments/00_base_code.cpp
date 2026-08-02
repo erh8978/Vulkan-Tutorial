@@ -39,7 +39,9 @@ class HelloTriangleApplication
 	vk::raii::Context                context;
 	vk::raii::Instance               instance       = nullptr;
 	vk::raii::PhysicalDevice         physicalDevice = nullptr;
+	vk::raii::Device                 device         = nullptr;
 	vk::raii::DebugUtilsMessengerEXT debugMessenger = nullptr;
+	vk::raii::Queue                  graphicsQueue  = nullptr;
 
 	void initWindow()
 	{
@@ -59,6 +61,110 @@ class HelloTriangleApplication
 		createInstance();
 		setupDebugMessenger();
 		pickPhysicalDevice();
+		createLogicalDevice();
+	}
+
+	void createInstance()
+	{
+		// App name, engine, and version info struct
+		constexpr vk::ApplicationInfo appInfo{
+		    .pApplicationName   = "Hello Triangle",
+		    .applicationVersion = VK_MAKE_VERSION(1, 0, 0),
+		    .pEngineName        = "No Engine",
+		    .engineVersion      = VK_MAKE_VERSION(1, 0, 0),
+		    .apiVersion         = vk::ApiVersion14};
+
+		// Get the required layers.
+		std::vector<char const *> requiredLayers;
+		if (enableValidationLayers)
+		{
+			requiredLayers.assign(validationLayers.begin(), validationLayers.end());
+		}
+
+		// Check if the required layers are supported by the Vulkan implementation.
+		auto layerProperties = context.enumerateInstanceLayerProperties();
+		auto unsupportedLayerIt =
+		    std::ranges::find_if(requiredLayers, [&layerProperties](auto const &requiredLayer) {
+			    return std::ranges::none_of(layerProperties, [requiredLayer](auto const &layerProperty) { return strcmp(layerProperty.layerName, requiredLayer) == 0; });
+		    });
+		if (unsupportedLayerIt != requiredLayers.end())
+		{
+			throw std::runtime_error("Required layer not supported: " + std::string(*unsupportedLayerIt));
+		}
+
+		// Get the required extensions.
+		auto requiredExtensions = getRequiredInstanceExtensions();
+
+		// Check if the required extensions are supported by the Vulkan implementation.
+		auto extensionProperties = context.enumerateInstanceExtensionProperties();
+		auto unsupportedPropertyIt =
+		    std::ranges::find_if(requiredExtensions, [&extensionProperties](auto const &requiredExtension) {
+			    return std::ranges::none_of(extensionProperties, [requiredExtension](auto const &extensionProperty) {
+				    return strcmp(extensionProperty.extensionName, requiredExtension) == 0;
+			    });
+		    });
+		if (unsupportedPropertyIt != requiredExtensions.end())
+		{
+			throw std::runtime_error("Required extension not supported: " + std::string(*unsupportedPropertyIt));
+		}
+
+		vk::InstanceCreateInfo createInfo{
+		    .pApplicationInfo        = &appInfo,
+		    .enabledLayerCount       = static_cast<uint32_t>(requiredLayers.size()),
+		    .ppEnabledLayerNames     = requiredLayers.data(),
+		    .enabledExtensionCount   = static_cast<uint32_t>(requiredExtensions.size()),
+		    .ppEnabledExtensionNames = requiredExtensions.data()};
+
+		instance = vk::raii::Instance(context, createInfo);
+	}
+
+	std::vector<const char *> getRequiredInstanceExtensions()
+	{
+		uint32_t glfwExtensionCount = 0;
+		auto     glfwExtensions     = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
+
+		std::vector extensions(glfwExtensions, glfwExtensions + glfwExtensionCount);
+		if (enableValidationLayers)
+		{
+			extensions.push_back(vk::EXTDebugUtilsExtensionName);
+		}
+
+		return extensions;
+	}
+
+	void setupDebugMessenger()
+	{
+		if (!enableValidationLayers)
+			return;
+
+		// Select the flag severities that will be shown: warning and error.
+		vk::DebugUtilsMessageSeverityFlagsEXT severityFlags(
+		    vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning |
+		    vk::DebugUtilsMessageSeverityFlagBitsEXT::eError);
+
+		// Select the flag types that will be shown: general, performance, and validation.
+		vk::DebugUtilsMessageTypeFlagsEXT messageTypeFlags(
+		    vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral |
+		    vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance |
+		    vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation);
+
+		// Setup and create the debug messenger with the selected severities, flags, and a reference to the callback function.
+		vk::DebugUtilsMessengerCreateInfoEXT debugUtilsMessengerCreateInfoEXT{
+		    .messageSeverity = severityFlags,
+		    .messageType     = messageTypeFlags,
+		    .pfnUserCallback = &debugCallback};
+		debugMessenger = instance.createDebugUtilsMessengerEXT(debugUtilsMessengerCreateInfoEXT);
+	}
+
+	static VKAPI_ATTR vk::Bool32 VKAPI_CALL debugCallback(
+	    vk::DebugUtilsMessageSeverityFlagBitsEXT      severity,
+	    vk::DebugUtilsMessageTypeFlagsEXT             type,
+	    const vk::DebugUtilsMessengerCallbackDataEXT *pCallbackData,
+	    void                                         *pUserData)
+	{
+		std::cerr << "Validation layer: type " << to_string(type) << " msg: " << pCallbackData->pMessage << std::endl;
+
+		return vk::False;
 	}
 
 	void pickPhysicalDevice()
@@ -114,107 +220,45 @@ class HelloTriangleApplication
 		return std::ranges::all_of(requirements, [](const bool requirement) { return requirement; });
 	}
 
-	void setupDebugMessenger()
+	void createLogicalDevice()
 	{
-		if (!enableValidationLayers) return;
-
-		// Select the flag severities that will be shown: warning and error.
-		vk::DebugUtilsMessageSeverityFlagsEXT severityFlags(
-		    vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning |
-		    vk::DebugUtilsMessageSeverityFlagBitsEXT::eError);
-
-		// Select the flag types that will be shown: general, performance, and validation.
-		vk::DebugUtilsMessageTypeFlagsEXT messageTypeFlags(
-		    vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral |
-		    vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance |
-		    vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation);
+		std::vector<vk::QueueFamilyProperties> queueFamilyProperties = physicalDevice.getQueueFamilyProperties();
+		auto graphicsQueueFamilyProperty = std::ranges::find_if(queueFamilyProperties, [](auto const &qfp)
+			{ return (qfp.queueFlags & vk::QueueFlagBits::eGraphics) != static_cast<vk::QueueFlags>(0); });
+		auto graphicsIndex = static_cast<uint32_t>(std::distance(queueFamilyProperties.begin(), graphicsQueueFamilyProperty));
 		
-		// Setup and create the debug messenger with the selected severities, flags, and a reference to the callback function.
-		vk::DebugUtilsMessengerCreateInfoEXT debugUtilsMessengerCreateInfoEXT{
-		    .messageSeverity = severityFlags,
-		    .messageType     = messageTypeFlags,
-		    .pfnUserCallback = &debugCallback};
-		debugMessenger = instance.createDebugUtilsMessengerEXT(debugUtilsMessengerCreateInfoEXT);
-	}
+		float queuePriority = 0.5f;
+		vk::DeviceQueueCreateInfo deviceQueueCreateInfo{
+			.queueFamilyIndex = graphicsIndex,
+			.queueCount = 1,
+			.pQueuePriorities = &queuePriority
+		};
+		
+		// Come back to this later...
+		vk::PhysicalDeviceFeatures deviceFeatures;
 
-	void createInstance()
-	{
-		// App name, engine, and version info struct
-		constexpr vk::ApplicationInfo appInfo{
-		    .pApplicationName   = "Hello Triangle",
-		    .applicationVersion = VK_MAKE_VERSION(1, 0, 0),
-		    .pEngineName        = "No Engine",
-		    .engineVersion      = VK_MAKE_VERSION(1, 0, 0),
-		    .apiVersion         = vk::ApiVersion14};
+		vk::StructureChain<vk::PhysicalDeviceFeatures2,
+		                   vk::PhysicalDeviceVulkan11Features,
+		                   vk::PhysicalDeviceVulkan13Features,
+		                   vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>
+		    featureChain = {
+		        {},								 // vk::PhysicalDeviceFeatures2 (empty for now)
+		        {.shaderDrawParameters = true},	 // Enable shader draw parameters (from Vulkan 1.1)
+		        {.dynamicRendering	   = true},	 // Enable dynamic rendering (from Vulkan 1.3)
+		        {.extendedDynamicState = true}}; // Enable extended dynamic state (from the extension)
 
-		// Get the required layers.
-		std::vector<char const *> requiredLayers;
-		if (enableValidationLayers)
-		{
-			requiredLayers.assign(validationLayers.begin(), validationLayers.end());
-		}
+		std::vector<const char *> requiredDeviceExtensions = {
+		    vk::KHRSwapchainExtensionName};
 
-		// Check if the required layers are supported by the Vulkan implementation.
-		auto layerProperties = context.enumerateInstanceLayerProperties();
-		auto unsupportedLayerIt =
-			std::ranges::find_if(requiredLayers, [&layerProperties](auto const &requiredLayer) {
-				return std::ranges::none_of(layerProperties, [requiredLayer](auto const &layerProperty)
-					{ return strcmp(layerProperty.layerName, requiredLayer) == 0; });
-			});
-		if (unsupportedLayerIt != requiredLayers.end())
-		{
-			throw std::runtime_error("Required layer not supported: " + std::string(*unsupportedLayerIt));
-		}
+		vk::DeviceCreateInfo deviceCreateInfo{
+		    .pNext                   = &featureChain.get<vk::PhysicalDeviceFeatures2>(),
+		    .queueCreateInfoCount    = 1,
+		    .pQueueCreateInfos       = &deviceQueueCreateInfo,
+		    .enabledExtensionCount   = static_cast<uint32_t>(requiredDeviceExtensions.size()),
+		    .ppEnabledExtensionNames = requiredDeviceExtensions.data()};
 
-		// Get the required extensions.
-		auto requiredExtensions = getRequiredInstanceExtensions();
-
-		// Check if the required extensions are supported by the Vulkan implementation.
-		auto extensionProperties = context.enumerateInstanceExtensionProperties();
-		auto unsupportedPropertyIt =
-		    std::ranges::find_if(requiredExtensions, [&extensionProperties](auto const &requiredExtension) {
-			    return std::ranges::none_of(extensionProperties, [requiredExtension](auto const &extensionProperty) {
-				    return strcmp(extensionProperty.extensionName, requiredExtension) == 0;
-			    });
-		    });
-		if (unsupportedPropertyIt != requiredExtensions.end())
-		{
-			throw std::runtime_error("Required extension not supported: " + std::string(*unsupportedPropertyIt));
-		}
-
-		vk::InstanceCreateInfo createInfo{
-		    .pApplicationInfo		 = &appInfo,
-		    .enabledLayerCount		 = static_cast<uint32_t>(requiredLayers.size()),
-		    .ppEnabledLayerNames     = requiredLayers.data(),
-		    .enabledExtensionCount   = static_cast<uint32_t>(requiredExtensions.size()),
-			.ppEnabledExtensionNames = requiredExtensions.data()};
-
-		instance = vk::raii::Instance(context, createInfo);
-	}
-
-	std::vector<const char*> getRequiredInstanceExtensions()
-	{
-		uint32_t glfwExtensionCount = 0;
-		auto     glfwExtensions     = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
-
-		std::vector extensions(glfwExtensions, glfwExtensions + glfwExtensionCount);
-		if (enableValidationLayers)
-		{
-			extensions.push_back(vk::EXTDebugUtilsExtensionName);
-		}
-
-		return extensions;
-	}
-
-	static VKAPI_ATTR vk::Bool32 VKAPI_CALL debugCallback(
-		vk::DebugUtilsMessageSeverityFlagBitsEXT	  severity,
-		vk::DebugUtilsMessageTypeFlagsEXT			  type,
-		const vk::DebugUtilsMessengerCallbackDataEXT* pCallbackData,
-		void* pUserData)
-	{
-		std::cerr << "Validation layer: type " << to_string(type) << " msg: " << pCallbackData->pMessage << std::endl;
-
-		return vk::False;
+		device = vk::raii::Device(physicalDevice, deviceCreateInfo);
+		graphicsQueue = vk::raii::Queue(device, graphicsIndex, 0);
 	}
 
 	void mainLoop()
