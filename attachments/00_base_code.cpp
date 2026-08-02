@@ -41,6 +41,7 @@ class HelloTriangleApplication
 	vk::raii::PhysicalDevice         physicalDevice = nullptr;
 	vk::raii::Device                 device         = nullptr;
 	vk::raii::DebugUtilsMessengerEXT debugMessenger = nullptr;
+	vk::raii::SurfaceKHR             surface        = nullptr;
 	vk::raii::Queue                  graphicsQueue  = nullptr;
 
 	void initWindow()
@@ -60,6 +61,7 @@ class HelloTriangleApplication
 	{
 		createInstance();
 		setupDebugMessenger();
+		createSurface();
 		pickPhysicalDevice();
 		createLogicalDevice();
 	}
@@ -167,6 +169,15 @@ class HelloTriangleApplication
 		return vk::False;
 	}
 
+	void createSurface()
+	{
+		VkSurfaceKHR _surface;
+		if (glfwCreateWindowSurface(*instance, window, nullptr, &_surface) != 0){
+			throw std::runtime_error("Failed to create window surface!");
+		}
+		surface = vk::raii::SurfaceKHR(instance, _surface);
+	}
+
 	void pickPhysicalDevice()
 	{
 		// Get all GPUs that support Vulkan.
@@ -223,13 +234,27 @@ class HelloTriangleApplication
 	void createLogicalDevice()
 	{
 		std::vector<vk::QueueFamilyProperties> queueFamilyProperties = physicalDevice.getQueueFamilyProperties();
-		auto graphicsQueueFamilyProperty = std::ranges::find_if(queueFamilyProperties, [](auto const &qfp)
-			{ return (qfp.queueFlags & vk::QueueFlagBits::eGraphics) != static_cast<vk::QueueFlags>(0); });
-		auto graphicsIndex = static_cast<uint32_t>(std::distance(queueFamilyProperties.begin(), graphicsQueueFamilyProperty));
+
+		// Get the first queue that supports both graphics and presenting to a surface.
+		uint32_t queueIndex = ~0;
+		for (uint32_t qfpIndex = 0; qfpIndex < queueFamilyProperties.size(); qfpIndex++)
+		{
+			if ((queueFamilyProperties[qfpIndex].queueFlags & vk::QueueFlagBits::eGraphics) &&
+				physicalDevice.getSurfaceSupportKHR(qfpIndex, *surface))
+			{
+				// Found a queue family that supports both graphics and present.
+				queueIndex = qfpIndex;
+				break;
+			}
+		}
+		if (queueIndex == ~0)
+		{
+			throw std::runtime_error("Could not find a queue for graphics and present. Terminating.");
+		}
 		
 		float queuePriority = 0.5f;
 		vk::DeviceQueueCreateInfo deviceQueueCreateInfo{
-			.queueFamilyIndex = graphicsIndex,
+			.queueFamilyIndex = queueIndex,
 			.queueCount = 1,
 			.pQueuePriorities = &queuePriority
 		};
@@ -258,7 +283,7 @@ class HelloTriangleApplication
 		    .ppEnabledExtensionNames = requiredDeviceExtensions.data()};
 
 		device = vk::raii::Device(physicalDevice, deviceCreateInfo);
-		graphicsQueue = vk::raii::Queue(device, graphicsIndex, 0);
+		graphicsQueue = vk::raii::Queue(device, queueIndex, 0);
 	}
 
 	void mainLoop()
