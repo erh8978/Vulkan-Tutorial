@@ -36,8 +36,9 @@ class HelloTriangleApplication
   private:
 	GLFWwindow* window = nullptr;
 
-	vk::raii::Context  context;
-	vk::raii::Instance instance = nullptr;
+	vk::raii::Context                context;
+	vk::raii::Instance               instance       = nullptr;
+	vk::raii::PhysicalDevice         physicalDevice = nullptr;
 	vk::raii::DebugUtilsMessengerEXT debugMessenger = nullptr;
 
 	void initWindow()
@@ -57,6 +58,60 @@ class HelloTriangleApplication
 	{
 		createInstance();
 		setupDebugMessenger();
+		pickPhysicalDevice();
+	}
+
+	void pickPhysicalDevice()
+	{
+		// Get all GPUs that support Vulkan.
+		std::vector<vk::raii::PhysicalDevice> physicalDevices = instance.enumeratePhysicalDevices();
+
+		// Iterate through GPUs, find the first that meets our needs, and store a reference to it.
+		auto const devIter = std::ranges::find_if(physicalDevices, [&](auto const &physicalDevice) { return isDeviceSuitable(physicalDevice); });
+		if (devIter == physicalDevices.end())
+		{
+			throw std::runtime_error("Failed to find a suitable GPU!");
+		}
+		physicalDevice = *devIter;
+		std::cout << "Selected GPU: " << physicalDevice.getProperties().deviceName << std::endl;
+	}
+
+	bool isDeviceSuitable(vk::raii::PhysicalDevice const& physicalDevice)
+	{
+		std::vector<bool> requirements;
+
+		// Requirement #1: Must support Vulkan 1.3 or later.
+		requirements.push_back(physicalDevice.getProperties().apiVersion >= vk::ApiVersion13);
+
+		// Requirement #2: Must support graphics operations.
+		auto queueFamilies = physicalDevice.getQueueFamilyProperties();
+		requirements.push_back(std::ranges::any_of(queueFamilies, [](auto const &qfp) { return !!(qfp.queueFlags & vk::QueueFlagBits::eGraphics); }));
+
+		// Requirement #3: Must support required extensions.
+		std::vector<const char *> requiredDeviceExtension = {vk::KHRSwapchainExtensionName};
+
+		auto availableDeviceExtensions = physicalDevice.enumerateDeviceExtensionProperties();
+		requirements.push_back(
+		    std::ranges::all_of(requiredDeviceExtension, [&availableDeviceExtensions](auto const &requiredDeviceExtension) {
+			    return std::ranges::any_of(availableDeviceExtensions, [requiredDeviceExtension](auto const &availableDeviceExtension) {
+				    return strcmp(availableDeviceExtension.extensionName, requiredDeviceExtension) == 0;});
+		    }));
+
+		// Requirement #4: Must support required optional features.
+		auto features = physicalDevice.template getFeatures2<vk::PhysicalDeviceFeatures2,
+		                                                     vk::PhysicalDeviceVulkan11Features,
+		                                                     vk::PhysicalDeviceVulkan13Features,
+		                                                     vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>();
+
+		requirements.push_back(features.template get<vk::PhysicalDeviceVulkan11Features>().shaderDrawParameters &&
+		                       features.template get<vk::PhysicalDeviceVulkan13Features>().dynamicRendering &&
+		                       features.template get<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>().extendedDynamicState);
+
+		// Requirement #5: Must be a dedicated GPU.
+		requirements.push_back(physicalDevice.getProperties().deviceType == vk::PhysicalDeviceType::eDiscreteGpu);
+
+		// If all requirements are met, return true.
+		return std::ranges::all_of(requirements, [](const bool requirement) { return requirement; });
 	}
 
 	void setupDebugMessenger()
