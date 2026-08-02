@@ -13,6 +13,15 @@ import vulkan_hpp;
 constexpr uint32_t WIDTH  = 800;
 constexpr uint32_t HEIGHT = 600;
 
+const std::vector<char const *> validationLayers = {
+    "VK_LAYER_KHRONOS_validation"};
+
+#ifdef NDEBUG
+constexpr bool enableValidationLayers = false;
+#else
+constexpr bool enableValidationLayers = true;
+#endif
+
 class HelloTriangleApplication
 {
   public:
@@ -20,7 +29,6 @@ class HelloTriangleApplication
 	{
 		initWindow();
 		initVulkan();
-		createInstance();
 		mainLoop();
 		cleanup();
 	}
@@ -30,6 +38,7 @@ class HelloTriangleApplication
 
 	vk::raii::Context  context;
 	vk::raii::Instance instance = nullptr;
+	vk::raii::DebugUtilsMessengerEXT debugMessenger = nullptr;
 
 	void initWindow()
 	{
@@ -47,6 +56,30 @@ class HelloTriangleApplication
 	void initVulkan()
 	{
 		createInstance();
+		setupDebugMessenger();
+	}
+
+	void setupDebugMessenger()
+	{
+		if (!enableValidationLayers) return;
+
+		// Select the flag severities that will be shown: warning and error.
+		vk::DebugUtilsMessageSeverityFlagsEXT severityFlags(
+		    vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning |
+		    vk::DebugUtilsMessageSeverityFlagBitsEXT::eError);
+
+		// Select the flag types that will be shown: general, performance, and validation.
+		vk::DebugUtilsMessageTypeFlagsEXT messageTypeFlags(
+		    vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral |
+		    vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance |
+		    vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation);
+		
+		// Setup and create the debug messenger with the selected severities, flags, and a reference to the callback function.
+		vk::DebugUtilsMessengerCreateInfoEXT debugUtilsMessengerCreateInfoEXT{
+		    .messageSeverity = severityFlags,
+		    .messageType     = messageTypeFlags,
+		    .pfnUserCallback = &debugCallback};
+		debugMessenger = instance.createDebugUtilsMessengerEXT(debugUtilsMessengerCreateInfoEXT);
 	}
 
 	void createInstance()
@@ -59,28 +92,74 @@ class HelloTriangleApplication
 		    .engineVersion      = VK_MAKE_VERSION(1, 0, 0),
 		    .apiVersion         = vk::ApiVersion14};
 
-		// Get the required instance extensions from GLFW
-		uint32_t glfwExtensionCount = 0;
-		auto     glfwExtensions     = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
-
-		// Check if required GLFW extensions are supported by the Vulkan implementation
-		auto extensionProperties = context.enumerateInstanceExtensionProperties();
-		for (uint32_t i = 0; i < glfwExtensionCount; ++i)
+		// Get the required layers.
+		std::vector<char const *> requiredLayers;
+		if (enableValidationLayers)
 		{
-			if (std::ranges::none_of(extensionProperties,
-				[glfwExtension = glfwExtensions[i]](auto const& extensionProperty)
-				{ return strcmp(extensionProperty.extensionName, glfwExtension) == 0; }))
-			{
-				throw std::runtime_error("Required GLFW extension not supported: " + std::string(glfwExtensions[i]));
-			}
+			requiredLayers.assign(validationLayers.begin(), validationLayers.end());
+		}
+
+		// Check if the required layers are supported by the Vulkan implementation.
+		auto layerProperties = context.enumerateInstanceLayerProperties();
+		auto unsupportedLayerIt =
+			std::ranges::find_if(requiredLayers, [&layerProperties](auto const &requiredLayer) {
+				return std::ranges::none_of(layerProperties, [requiredLayer](auto const &layerProperty)
+					{ return strcmp(layerProperty.layerName, requiredLayer) == 0; });
+			});
+		if (unsupportedLayerIt != requiredLayers.end())
+		{
+			throw std::runtime_error("Required layer not supported: " + std::string(*unsupportedLayerIt));
+		}
+
+		// Get the required extensions.
+		auto requiredExtensions = getRequiredInstanceExtensions();
+
+		// Check if the required extensions are supported by the Vulkan implementation.
+		auto extensionProperties = context.enumerateInstanceExtensionProperties();
+		auto unsupportedPropertyIt =
+		    std::ranges::find_if(requiredExtensions, [&extensionProperties](auto const &requiredExtension) {
+			    return std::ranges::none_of(extensionProperties, [requiredExtension](auto const &extensionProperty) {
+				    return strcmp(extensionProperty.extensionName, requiredExtension) == 0;
+			    });
+		    });
+		if (unsupportedPropertyIt != requiredExtensions.end())
+		{
+			throw std::runtime_error("Required extension not supported: " + std::string(*unsupportedPropertyIt));
 		}
 
 		vk::InstanceCreateInfo createInfo{
-		    .pApplicationInfo = &appInfo,
-			.enabledExtensionCount = glfwExtensionCount,
-			.ppEnabledExtensionNames = glfwExtensions};
+		    .pApplicationInfo		 = &appInfo,
+		    .enabledLayerCount		 = static_cast<uint32_t>(requiredLayers.size()),
+		    .ppEnabledLayerNames     = requiredLayers.data(),
+		    .enabledExtensionCount   = static_cast<uint32_t>(requiredExtensions.size()),
+			.ppEnabledExtensionNames = requiredExtensions.data()};
 
 		instance = vk::raii::Instance(context, createInfo);
+	}
+
+	std::vector<const char*> getRequiredInstanceExtensions()
+	{
+		uint32_t glfwExtensionCount = 0;
+		auto     glfwExtensions     = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
+
+		std::vector extensions(glfwExtensions, glfwExtensions + glfwExtensionCount);
+		if (enableValidationLayers)
+		{
+			extensions.push_back(vk::EXTDebugUtilsExtensionName);
+		}
+
+		return extensions;
+	}
+
+	static VKAPI_ATTR vk::Bool32 VKAPI_CALL debugCallback(
+		vk::DebugUtilsMessageSeverityFlagBitsEXT	  severity,
+		vk::DebugUtilsMessageTypeFlagsEXT			  type,
+		const vk::DebugUtilsMessengerCallbackDataEXT* pCallbackData,
+		void* pUserData)
+	{
+		std::cerr << "Validation layer: type " << to_string(type) << " msg: " << pCallbackData->pMessage << std::endl;
+
+		return vk::False;
 	}
 
 	void mainLoop()
