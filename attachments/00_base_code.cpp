@@ -1,17 +1,17 @@
-#include <memory>
 #if defined(__INTELLISENSE__) || !defined(USE_CPP20_MODULES)
 #	include <vulkan/vulkan_raii.hpp>
 #else
 import vulkan_hpp;
 #endif
+#define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 
 #include <cstdlib>
 #include <iostream>
 #include <stdexcept>
 
-const uint32_t WIDTH  = 800;
-const uint32_t HEIGHT = 600;
+constexpr uint32_t WIDTH  = 800;
+constexpr uint32_t HEIGHT = 600;
 
 class HelloTriangleApplication
 {
@@ -25,15 +25,18 @@ class HelloTriangleApplication
 	}
 
   private:
-	GLFWwindow *window = nullptr;
+	GLFWwindow* window = nullptr;
 
 	void initWindow()
 	{
+		// glfwInit should be called before anything else.
 		glfwInit();
 
+		// Set GLFW hints: 1. don't create an OpenGL API client, and 2.) don't allow the window to be resized.
 		glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 		glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
 
+		// Create the window
 		window = glfwCreateWindow(WIDTH, HEIGHT, "Vulkan", nullptr, nullptr);
 	}
 
@@ -51,8 +54,8 @@ class HelloTriangleApplication
 
 	void cleanup()
 	{
+		// GLFW resources
 		glfwDestroyWindow(window);
-
 		glfwTerminate();
 	}
 };
